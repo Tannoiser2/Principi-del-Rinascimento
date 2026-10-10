@@ -1,0 +1,9 @@
+*.app/
+*.command
+*.exe
+*.pck
+*.zip
+.DS_Store
+.godot/
+_vecchi/
+build/
