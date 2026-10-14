@@ -88,7 +88,7 @@ func _demo(args: Dictionary) -> void:
 			var ps := []
 			for i in 4:
 				ps.append({"name": ("Giocatore" if i == 0 else "Casa " + Data.FAMILIES[fams[i]].name), "family": fams[i], "side": "A", "ai": not (i == 0 and args.get("human", "1") == "1"), "level": 2})
-			start_game({"players": ps, "seed": int(args.get("seed", "7")), "autohuman": args.get("auto", "0") == "1", "autohuman_delay": float(args.get("adelay", "0.8"))})
+			start_game({"players": ps, "seed": int(args.get("seed", "7")), "autohuman": args.get("auto", "0") == "1", "autohuman_delay": float(args.get("adelay", "0.8")), "auto_notroops": args.get("notroops", "0") == "1"})
 		_:
 			show_menu()
 	get_viewport().warp_mouse(Vector2(1910, 1075))

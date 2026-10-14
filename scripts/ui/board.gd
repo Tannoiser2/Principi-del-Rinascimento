@@ -55,6 +55,7 @@ var muted := {}
 var _turn_deals := 0
 var _last_turn_seen := -1
 var _extra_text := ""
+var _condo_note_seen := ""
 # tutorial
 var tut := false
 var tut_off := false
@@ -817,6 +818,8 @@ func _autoanswer(pid: int, kind: String, ctx: Dictionary) -> void:
 		_autobot = AIBrain.new()
 		_autobot.setup(g, pid, 2, 99)
 	var r = _autobot.decide(kind, ctx)
+	if cfg.get("auto_notroops", false) and kind == "turn" and typeof(r) == TYPE_DICTIONARY and str(r.get("type", "")) == "buy_troop":
+		r = {"type": "pass"}   # solo per le prove: il giocatore automatico resta senza Truppe
 	_submit(r)
 
 func _on_decision(pid: int, kind: String, ctx: Dictionary) -> void:
@@ -918,11 +921,11 @@ func _on_decision(pid: int, kind: String, ctx: Dictionary) -> void:
 				{"label": "Paga", "value": true}, {"label": "Non pagare (tradimento: la tua reputazione crolla)", "value": false}])
 		"holy_offer":
 			var w3: Dictionary = ctx.war
-			_deal_form({"title": "Offerta al Papa", "types": ["holy"], "ctx": {"to": int(ctx.pope)}, "allow_mute": true, "cancel": "Nessuna offerta",
+			_moment_bar({"title": "Offerta al Papa", "mute_key": "holy_offer", "types": ["holy"], "ctx": {"to": int(ctx.pope)}, "allow_mute": true, "cancel": "Nessuna offerta",
 				"text": "Puoi offrire denaro al Papa (%s) perché formi la Lega Santa a fianco di %s." % [g.pname(int(ctx.pope)), Data.CITY_NAME[w3[ctx.side]]]}, func(d):
 					_moment_result("holy_offer", d))
 		"veto_bounty":
-			_deal_form({"title": "Taglia sul Veto", "types": ["veto_bounty"], "allow_mute": true, "cancel": "Nessuna taglia",
+			_moment_bar({"title": "Taglia sul Veto", "types": ["veto_bounty"], "allow_mute": true, "cancel": "Nessuna taglia",
 				"text": "%s attacca %s e hai tessere in gioco. Vuoi promettere una ricompensa a chi porrà il Veto?" % [Data.CITY_NAME[ctx.att], Data.CITY_NAME[ctx.def]]}, func(d):
 					_moment_result("veto_bounty", d))
 		"moment_offer":
@@ -937,7 +940,7 @@ func _on_decision(pid: int, kind: String, ctx: Dictionary) -> void:
 			if mk2 == "reroll_req" and ctx.has("roll"):
 				var rr: Dictionary = ctx.roll
 				texts[mk2] += "\n%s: %s %d contro %s %d." % [rr.label, Data.CITY_NAME[ctx.war[rr.a_side]], rr.ta, Data.CITY_NAME[ctx.war[rr.d_side]], rr.td]
-			_deal_form({"title": titles.get(mk2, "Accordo"), "types": [mk2], "ctx": ctx, "allow_mute": true, "cancel": "Nessuna offerta",
+			_moment_bar({"title": titles.get(mk2, "Accordo"), "types": [mk2], "ctx": ctx, "allow_mute": true, "cancel": "Nessuna offerta",
 				"text": texts.get(mk2, "")}, func(d):
 					_moment_result(mk2, d))
 		_:
@@ -1153,6 +1156,40 @@ func _deals_note(ctx: Dictionary) -> String:
 	for d in ds:
 		t += "\n• " + g.deal_text(d)
 	return t
+
+## Momento di trattativa: invece di aprire subito il modulo, la barra delle azioni suggerisce
+## gli accordi possibili; sei tu a scegliere se e quale proporre.
+func _moment_bar(spec: Dictionary, cb: Callable) -> void:
+	_close_choice()
+	_clear(actions_box)
+	var types: Array = spec.get("types", [])
+	var mk: String = str(spec.get("mute_key", types[0] if not types.is_empty() else ""))
+	prompt_label.text = "Momento per trattare: %s (facoltativo)" % spec.get("title", "Accordo")
+	var dl := UI.label(str(spec.get("text", "")), 15, Color(0.88, 0.8, 0.64), UI.f_italic)
+	dl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dl.custom_minimum_size.x = CW - 280
+	actions_box.add_child(dl)
+	var first := true
+	for t in types:
+		var info: Dictionary = Data.DEAL_INFO.get(t, {"name": str(t), "desc": ""})
+		var b := UI.button(("★ " if first else "") + "Proponi: " + info.name + "…", func():
+			var sp: Dictionary = spec.duplicate()
+			sp["types"] = [t]
+			_deal_form(sp, func(d):
+				if d == null:
+					_moment_bar(spec, cb)
+				else:
+					cb.call(d)))
+		b.tooltip_text = info.desc + ("\n(Suggerito ora)" if first else "")
+		actions_box.add_child(b)
+		first = false
+	actions_box.add_child(UI.button(spec.get("cancel", "Nessuna offerta"), func(): _submit(null)))
+	if spec.get("allow_mute", false):
+		actions_box.add_child(UI.button("Non chiedermelo più in questa partita", func():
+			muted[mk] = true
+			_submit(null)))
+	_compact_actions()
+	Sfx.play("coin", -14, 1.3)
 
 func _moment_result(mk: String, d) -> void:
 	if typeof(d) == TYPE_DICTIONARY and d.get("_mute", false):
@@ -1454,6 +1491,21 @@ func _on_auction(a: Dictionary) -> void:
 		ui.img.texture = Data.back_tex(Data.CITY_BACK[city])
 		ui.cur.text = "Si paga in Influenza · la città paga %d Oro al vincitore" % g.status[city]
 		ui.img.custom_minimum_size = Vector2(96, 120)
+		# perché non ti viene chiesto di offrire?
+		if viewer >= 0 and not (viewer in a.part):
+			var why := ""
+			if viewer == int(a.get("exclude", -1)):
+				why = "Non partecipi: comandi già l'esercito dell'attaccante."
+			elif g.players[viewer].troops.is_empty():
+				why = "Non partecipi: per concorrere al comando serve almeno una Truppa (compra una Truppa nel tuo turno)."
+			if why != "":
+				ui.cur.text += "\n" + why
+				var wkey := "%d_%s" % [g.war_seq, g.war.get("phase", "")]
+				if _condo_note_seen != wkey:
+					_condo_note_seen = wkey
+					_toast(why)
+				if tut and g.players[viewer].troops.is_empty():
+					_tut_tip("no_troops", func(): return auction_dlg.get_global_rect() if auction_dlg.visible else Rect2())
 	else:
 		ui.title.text = "Asta: " + Data.item_name(item)
 		ui.img.texture = Data.item_tex(item)
